@@ -1,0 +1,58 @@
+# Remote transcode worker — runs on another machine, joins over Tailscale.
+#
+# This is the payoff of the queue-and-capability design: a worker needs nothing
+# but the queue, the object store and the database. It does not need a public
+# IP, an inbound port, or a reverse proxy. It reaches IN to the coordinator over
+# Tailscale, so a VM behind NAT with only a 100.x address works fine.
+#
+# It runs the `media` queue: ffprobe, proxy transcode, thumbnails, shot
+# detection, the separate stage, and the fit/mix stages. That is the CPU-heavy,
+# embarrassingly parallel half of the pipeline — exactly what you want to spread
+# across machines.
+#
+#   Setup on the remote VM:
+#     1. tailscale up                       # must see the coordinator
+#     2. copy this file + remote.env
+#     3. docker compose -f docker-compose.remote.yml --env-file remote.env up -d
+#
+# It does NOT run:
+#   · `ai`  (whisper/pyannote/IndicTrans2) — add QUEUES=media,ai if the VM has
+#     the RAM and you mirror the models to it
+#   · `tts` (Chatterbox)                   — that is the GPU-shaped stage
+
+name: dubbing-remote
+
+services:
+  worker:
+    image: ${WORKER_IMAGE:-dubbing-worker:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      celery -A app.tasks.celery worker
+      -Q ${QUEUES:-media}
+      --loglevel=INFO
+      --concurrency=${WORKER_CONCURRENCY:-4}
+      --max-tasks-per-child=8
+      -n ${WORKER_NAME:-remote}@%h
+    environment:
+      # Everything points at the coordinator's TAILSCALE address. These are the
+      # only four things a worker needs to know.
+      DATABASE_URL: postgresql+psycopg2://dubbing:${POSTGRES_PASSWORD}@${COORDINATOR}:${PG_PORT:-5532}/dubbing
+      REDIS_URL: redis://:${REDIS_PASSWORD}@${COORDINATOR}:${REDIS_PORT:-6479}/0
+      S3_ENDPOINT: http://${COORDINATOR}:${MINIO_PORT:-9100}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-media}
+      SCRATCH_DIR: /scratch
+      PROXY_HEIGHT: ${PROXY_HEIGHT:-720}
+      FFMPEG_THREADS: ${FFMPEG_THREADS:-4}
+      MODEL_DIR: /models
+    volumes:
+      - scratch:/scratch
+      - models:/models
+    restart: unless-stopped
+
+volumes:
+  scratch:
+  models:

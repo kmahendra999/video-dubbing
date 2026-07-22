@@ -1,0 +1,55 @@
+# TTS worker — Chatterbox (Resemble AI), MIT on code AND weights.
+#
+# A SEPARATE image, not a layer on Dockerfile.ai, and not by preference —
+# by necessity. Chatterbox pins torch==2.6 and numpy<2 and pulls transformers
+# 5.x. pyannote wants torch>=2.8 and numpy>=2.0; IndicTrans2's custom code
+# breaks on transformers>=5. Those constraints cannot coexist in one image.
+#
+# This is docs/ARCHITECTURE.md §6's "one container per model family" rule.
+# They share nothing but the object store and the queue, which is exactly why
+# a GPU host can run this image alone and leave the rest here.
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgomp1 \
+        git \
+        espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+
+# App deps (no transformers pin here — Chatterbox owns this image's tree).
+RUN pip install --no-cache-dir \
+        "sqlalchemy>=2.0" \
+        "psycopg2-binary>=2.9" \
+        "celery[redis]>=5.4" \
+        "boto3>=1.35" \
+        "pydantic-settings>=2.6"
+
+# CPU-only torch FIRST, so chatterbox-tts resolves against it instead of
+# dragging ~3GB of CUDA wheels onto a box with no NVIDIA GPU.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch==2.6.0" "torchaudio==2.6.0"
+
+RUN pip install --no-cache-dir "chatterbox-tts"
+
+# Kokoro — Apache-2.0 code AND weights, ungated. Not a cloner: 54 FIXED voices.
+# It exists here to generate reference clips for the synthetic voice bank, i.e.
+# voices that belong to no human being (app/voicebank.py).
+# misaki[ja] needs a CMake toolchain to build pyopenjtalk; installing it fails the
+# whole layer and silently takes the Chinese deps with it. Install zh deps direct
+# and skip Japanese — 4 timbres are not worth a compiler in this image.
+RUN pip install --no-cache-dir "kokoro>=0.9" "soundfile" \
+        "ordered_set" "pypinyin" "cn2an" "jieba"
+
+COPY app ./app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/models/hf \
+    OMP_NUM_THREADS=8
+
+CMD ["celery", "-A", "app.tasks.celery", "worker", "-Q", "tts", "--loglevel=INFO", "--concurrency=1"]

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dubbing</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23FFB000'/></svg>">
+</head>
+<body>
+
+<header id="bar">
+  <button class="brand" id="brand" type="button" aria-label="Back to library">
+    <span class="lamp" aria-hidden="true"></span>
+    <span class="name">Dubbing</span>
+  </button>
+
+  <button class="ghost" id="libBtn" type="button">← Library</button>
+
+  <button class="picker" id="projectPicker" type="button" aria-haspopup="listbox">
+    <span id="pickerTitle">No project</span>
+    <span class="caret" aria-hidden="true">▾</span>
+  </button>
+
+  <div class="bar-right">
+    <button class="ghost" id="newBtn" type="button">New project</button>
+    <button class="ghost" id="voicesBtn" type="button">Voices</button>
+    <button class="ghost" id="modelsBtn" type="button">Models</button>
+    <button class="ghost" id="themeBtn" type="button" aria-label="Switch theme">Light</button>
+  </div>
+</header>
+
+<div id="projectMenu" class="menu hidden" role="listbox"></div>
+
+<section id="library"></section>
+
+<main id="shell" class="hidden">
+  <nav id="steps" aria-label="Progress"></nav>
+  <section id="stage"></section>
+</main>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+<!-- ── dialogs ─────────────────────────────────────────────────────────── -->
+
+<dialog id="newDlg">
+  <h3>New project</h3>
+  <form method="dialog" id="newForm">
+    <label class="lbl" for="ttl">What are you dubbing?</label>
+    <input type="text" id="ttl" placeholder="Jaadugar — clip 1" autocomplete="off" required>
+    <div class="pair">
+      <div>
+        <label class="lbl" for="srcLang">Spoken language</label>
+        <select id="srcLang"></select>
+      </div>
+      <div>
+        <label class="lbl" for="tgtLang">Dub into</label>
+        <select id="tgtLang"></select>
+      </div>
+    </div>
+    <div class="row">
+      <button class="ghost" value="cancel" type="submit">Cancel</button>
+      <button class="btn" value="ok" type="submit">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="voicesDlg">
+  <div class="dlg-head">
+    <h3>Voice library</h3>
+    <button class="ghost" id="voicesClose" type="button">Close</button>
+  </div>
+  <p class="hint">
+    AI voices belong to nobody and need no consent. A real performer's voice needs a signed
+    consent record before it can be used — that's enforced, not advisory.
+  </p>
+  <div class="vfilter" id="voiceFilter"></div>
+  <div id="voiceGrid" class="vgrid"></div>
+  <details id="newVoice">
+    <summary>Add a performer's voice</summary>
+    <div class="vform">
+      <input type="text" id="vName" placeholder="Character or voice name" autocomplete="off">
+      <input type="text" id="vActor" placeholder="Performer's real name" autocomplete="off">
+      <button class="btn" id="vCreate" type="button">Create</button>
+    </div>
+  </details>
+</dialog>
+
+<dialog id="consentDlg">
+  <h3>Consent record</h3>
+  <p class="hint">
+    Indian courts enforce voice as a personality right — Anil Kapoor and Amitabh Bachchan both hold
+    orders protecting theirs. Record the real scope of what was agreed.
+  </p>
+  <form method="dialog" id="consentForm">
+    <label class="lbl" for="cSig">Who signed</label>
+    <input type="text" id="cSig" required>
+    <label class="lbl" for="cRef">Agreement reference</label>
+    <input type="text" id="cRef" placeholder="Contract ID or document link">
+    <label class="lbl" for="cScope">Scope</label>
+    <input type="text" id="cScope" placeholder="Which titles, territories, languages">
+    <label class="lbl" for="cExp">Expires</label>
+    <input type="text" id="cExp" placeholder="2027-12-31">
+    <div class="row">
+      <button class="ghost" value="cancel" type="submit">Cancel</button>
+      <button class="btn" value="ok" type="submit">Record signature</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="modelsDlg">
+  <div class="dlg-head">
+    <h3>Models</h3>
+    <button class="ghost" id="modelsClose" type="button">Close</button>
+  </div>
+  <p class="hint" id="modelsIntro"></p>
+  <div class="tablewrap">
+    <table id="modelsTable">
+      <thead><tr><th>Model</th><th>Used for</th><th>Source</th><th>On this box</th><th>Size</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="hint" id="modelsHelp"></p>
+</dialog>
+
+<input type="file" id="picker" accept="video/*,.mkv,.mov,.mp4,.avi,.m4v,.webm,.ts,.mxf" class="hidden">
+<input type="file" id="clipPicker" accept="audio/*,video/*" class="hidden">
+
+<script src="/static/app.js"></script>
+</body>
+</html>

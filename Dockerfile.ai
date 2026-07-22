@@ -1,0 +1,61 @@
+# AI worker — Phase 2 (analysis).
+#
+# Deliberately separate from the media image. Whisper, pyannote and ffmpeg want
+# mutually incompatible dependency trees; one "ai-worker" image that holds all
+# of them is weeks of dependency hell (docs/ARCHITECTURE.md §6).
+#
+# faster-whisper runs on CTranslate2, NOT torch — so ASR alone stays a small
+# image. torch is pulled in only for pyannote, and CPU-only to keep it lean.
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+
+# Shared app deps (no opencv/scenedetect — those belong to the media worker).
+RUN pip install --no-cache-dir \
+        "sqlalchemy>=2.0" \
+        "psycopg2-binary>=2.9" \
+        "celery[redis]>=5.4" \
+        "boto3>=1.35" \
+        "pydantic-settings>=2.6"
+
+# ASR — CTranslate2 backend, no torch.
+RUN pip install --no-cache-dir "faster-whisper>=1.1"
+
+# Diarization — torch CPU-only wheels, ~800MB instead of ~2.5GB CUDA.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        "torch>=2.2" "torchaudio>=2.2" \
+    && pip install --no-cache-dir "pyannote.audio>=3.3" "soundfile" "silero-vad" "scikit-learn"
+
+# Translation — IndicTrans2 (MIT). IndicTransToolkit builds a Cython ext, so it
+# needs a compiler; the toolchain is removed in the same layer to keep it out
+# of the image.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir \
+        "transformers>=4.44,<5" \
+        "sentencepiece" \
+        "IndicTransToolkit" \
+    && apt-get purge -y build-essential && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# NOTE: Chatterbox does NOT belong in this image. It pins torch==2.6/numpy<2 and
+# upgrades transformers past 4.x — which breaks pyannote (needs torch>=2.8,
+# numpy>=2.0) AND IndicTrans2 (needs transformers<5). It lives in Dockerfile.tts.
+# This is the "one container per model family" rule in docs/ARCHITECTURE.md §6,
+# learned the hard way.
+
+COPY app ./app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/models/hf \
+    OMP_NUM_THREADS=4
+
+CMD ["celery", "-A", "app.tasks.celery", "worker", "-Q", "ai", "--loglevel=INFO", "--concurrency=1"]

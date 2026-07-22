@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dubbing — Sign in</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23FFB000'/></svg>">
+<style>
+  body { display: grid; place-items: center; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 28px;
+    width: min(340px, 92vw);
+  }
+  .card .lamp { margin-bottom: 14px; }
+  .card h1 {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+  }
+  .card p { color: var(--text-faint); font-size: 12px; margin: 0 0 18px; line-height: 1.5; }
+  .card input {
+    width: 100%;
+    background: var(--ground);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 9px 10px;
+    margin-bottom: 12px;
+  }
+  .card .btn { width: 100%; }
+  #err { color: var(--fail); font-size: 12px; margin: 10px 0 0; min-height: 1em; }
+  .hint-box {
+    margin-top: 16px; padding: 11px 12px;
+    border: 1px solid var(--line); border-radius: var(--r);
+    background: var(--raised);
+  }
+  .hint-box .lbl { margin-bottom: 7px; }
+  .hint-row { display: flex; align-items: center; gap: 7px; }
+  .hint-row code {
+    flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+    background: var(--ground); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 6px 9px; font-size: 12.5px;
+    user-select: all;
+  }
+  .hint-row .ghost { flex: none; }
+</style>
+</head>
+<body>
+<form class="card" id="f">
+  <span class="lamp" aria-hidden="true" style="display:block"></span>
+  <h1>Dubbing</h1>
+  <p>This instance holds licensed voices and signed consent records. Sign in to continue.</p>
+  <label class="label" for="pw">Password</label>
+  <input type="password" id="pw" autocomplete="current-password" autofocus required>
+  <button class="btn" type="submit">Sign in</button>
+  <p id="err"></p>
+  <div id="hint" class="hint-box hidden">
+    <span class="lbl">Local-only instance — password</span>
+    <div class="hint-row">
+      <code id="hintPw" class="mono"></code>
+      <button class="ghost" id="copyBtn" type="button">Copy</button>
+      <button class="ghost" id="fillBtn" type="button">Fill</button>
+    </div>
+  </div>
+</form>
+<script>
+// The password is only ever shown when the SERVER confirms this instance is
+// bound to loopback. The page never decides that for itself — see app/auth.py.
+fetch("/api/login-hint").then(r => r.json()).then(d => {
+  if (!d.password) return;
+  document.getElementById("hintPw").textContent = d.password;
+  document.getElementById("hint").classList.remove("hidden");
+  document.getElementById("copyBtn").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(d.password);
+      document.getElementById("copyBtn").textContent = "Copied";
+      setTimeout(() => document.getElementById("copyBtn").textContent = "Copy", 1600);
+    } catch {
+      document.getElementById("copyBtn").textContent = "Select it";
+    }
+  };
+  document.getElementById("fillBtn").onclick = () => {
+    const pw = document.getElementById("pw");
+    pw.value = d.password;
+    pw.focus();
+  };
+}).catch(() => {});
+
+document.getElementById("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  try {
+    const r = await fetch("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: document.getElementById("pw").value }),
+    });
+    if (r.ok) { location.href = "/"; return; }
+    err.textContent = "That password is not correct.";
+  } catch {
+    err.textContent = "Could not reach the server.";
+  }
+});
+</script>
+</body>
+</html>

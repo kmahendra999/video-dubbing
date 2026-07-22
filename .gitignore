@@ -1,0 +1,16 @@
+# Secrets — never commit. Contains HF_TOKEN and LLM API keys.
+.env
+*.env
+!.env.example
+
+__pycache__/
+*.pyc
+.venv/
+scratch/
+*.mp4
+*.mkv
+*.wav
+
+# Contains real credentials for remote workers
+remote.env
+.env.bak

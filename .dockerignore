@@ -1,0 +1,7 @@
+docs/
+.git/
+.env
+__pycache__/
+*.pyc
+*.mp4
+*.mkv

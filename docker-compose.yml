@@ -1,0 +1,192 @@
+name: dubbing
+
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL}
+  S3_ENDPOINT: ${S3_ENDPOINT}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+  S3_BUCKET: ${S3_BUCKET}
+  SCRATCH_DIR: ${SCRATCH_DIR}
+  PROXY_HEIGHT: ${PROXY_HEIGHT}
+  FFMPEG_THREADS: ${FFMPEG_THREADS}
+  MODEL_DIR: ${MODEL_DIR:-/models}
+  # Set HF_HUB_OFFLINE=1 once everything you need is mirrored: the stack then
+  # runs with no HuggingFace contact and no token, from MinIO alone.
+  HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-}
+  TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-}
+  ASR_MODEL: ${ASR_MODEL:-large-v3}
+  ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
+  ASR_THREADS: ${ASR_THREADS:-4}
+  ASR_WORKERS: ${ASR_WORKERS:-4}
+  ASR_CHUNK_SECONDS: ${ASR_CHUNK_SECONDS:-300}
+  HF_TOKEN: ${HF_TOKEN:-}
+  DIAR_MODEL: ${DIAR_MODEL:-pyannote/speaker-diarization-community-1}
+  DIAR_BACKEND: ${DIAR_BACKEND:-diy}
+  DIAR_EMBEDDING_MODEL: ${DIAR_EMBEDDING_MODEL:-pyannote/wespeaker-voxceleb-resnet34-LM}
+  DIAR_THRESHOLD: ${DIAR_THRESHOLD:-0.85}
+  DIAR_MIN_SPEAKER_SECONDS: ${DIAR_MIN_SPEAKER_SECONDS:-2.0}
+  DIAR_NUM_SPEAKERS: ${DIAR_NUM_SPEAKERS:-0}
+  DIAR_WINDOW: ${DIAR_WINDOW:-2.0}
+  DIAR_HOP: ${DIAR_HOP:-1.0}
+  DIAR_MIN_WINDOW: ${DIAR_MIN_WINDOW:-0.6}
+  BANDIT_CHECKPOINT: ${BANDIT_CHECKPOINT:-}
+  MT_BATCH_SIZE: ${MT_BATCH_SIZE:-8}
+  MT_THREADS: ${MT_THREADS:-8}
+  MT_MAX_LENGTH: ${MT_MAX_LENGTH:-128}
+  LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+  LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  XAI_API_KEY: ${XAI_API_KEY:-}
+  LLM_BATCH_SIZE: ${LLM_BATCH_SIZE:-20}
+  REFINE_PASSES: ${REFINE_PASSES:-2}
+  TTS_THREADS: ${TTS_THREADS:-8}
+  TTS_SYLL_PER_SEC: ${TTS_SYLL_PER_SEC:-4.6}
+  TTS_OVERHEAD_MS: ${TTS_OVERHEAD_MS:-510}
+  TTS_MS_PER_SYLLABLE: ${TTS_MS_PER_SYLLABLE:-421}
+  TTS_CFG_WEIGHT: ${TTS_CFG_WEIGHT:-0.5}
+  VOICEBANK_SPEED: ${VOICEBANK_SPEED:-1.3}
+  TTS_RUNAWAY_FACTOR: ${TTS_RUNAWAY_FACTOR:-1.8}
+  TTS_RETRIES: ${TTS_RETRIES:-3}
+  DUCK_LEVEL: ${DUCK_LEVEL:-0.55}
+  DUCK_THRESHOLD: ${DUCK_THRESHOLD:-0.03}
+  DUCK_RATIO: ${DUCK_RATIO:-9.0}
+  TTS_EXAGGERATION: ${TTS_EXAGGERATION:-0.5}
+  SYNTH_QUEUE: ${SYNTH_QUEUE:-tts}
+  APP_PASSWORD: ${APP_PASSWORD:-}
+  SECRET_KEY: ${SECRET_KEY:-}
+  DEV_SHOW_PASSWORD: ${DEV_SHOW_PASSWORD:-}
+  UI_BIND: ${UI_BIND:-0.0.0.0}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${EXPOSE_BIND:-127.0.0.1}:${PG_PORT:-5532}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # requirepass is not optional once this leaves the container network: a
+    # Celery broker anyone can write to is a remote-code-execution vector.
+    command: >
+      redis-server --save 60 1 --appendonly no
+      --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    volumes:
+      - redisdata:/data
+    ports:
+      # Tailscale address ONLY — never 0.0.0.0. Empty EXPOSE_BIND keeps it
+      # container-internal, which is the right default for a single box.
+      - "${EXPOSE_BIND:-127.0.0.1}:${REDIS_PORT:-6479}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "${EXPOSE_BIND:-127.0.0.1}:${MINIO_PORT:-9100}:9000"
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+    environment: *app-env
+    # The one and only published port.
+    ports:
+      - "${UI_BIND:-0.0.0.0}:${UI_PORT:-8621}:8000"
+    volumes:
+      - scratch:/scratch
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_started}
+    restart: unless-stopped
+
+  # ffmpeg / ffprobe / PySceneDetect. Phase 1 + the separate stage.
+  worker:
+    build: .
+    command: >
+      celery -A app.tasks.celery worker
+      -Q media
+      --loglevel=INFO
+      --concurrency=${WORKER_CONCURRENCY}
+      --max-tasks-per-child=8
+    environment: *app-env
+    volumes:
+      - scratch:/scratch
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_started}
+    restart: unless-stopped
+
+  # Chatterbox TTS. A THIRD image because Chatterbox pins torch==2.6/numpy<2
+  # and transformers 5.x, which pyannote and IndicTrans2 cannot live with.
+  worker-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile.tts
+    command: >
+      celery -A app.tasks.celery worker
+      -Q tts
+      --loglevel=INFO
+      --concurrency=${TTS_CONCURRENCY:-1}
+      --max-tasks-per-child=2
+    environment: *app-env
+    volumes:
+      - scratch:/scratch
+      - models:/models
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_started}
+    restart: unless-stopped
+
+  # faster-whisper + pyannote. Separate image on purpose — incompatible deps.
+  worker-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile.ai
+    command: >
+      celery -A app.tasks.celery worker
+      -Q ai
+      --loglevel=INFO
+      --concurrency=${AI_CONCURRENCY:-1}
+      --max-tasks-per-child=4
+    environment: *app-env
+    volumes:
+      - scratch:/scratch
+      - models:/models
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_started}
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  scratch:
+  models:
